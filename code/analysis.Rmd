@@ -52,7 +52,7 @@ data_psychosis <- read_csv("../data/psychosis - Bernardin et al. 2023/psychosis 
   janitor::clean_names() %>%
   mutate(across(everything(), ~ ifelse(. == 2, 1, .)))
 
-# data_hypomania <- read_csv("../data/hypomania - Chrobak et al. 2018/matrix.csv") 
+data_hypomania <- read_csv("../data/hypomania - Chrobak et al. 2018/hypomania.csv") 
 
 data_eatingdisorders <- read_csv("../data/eating disorders - Christensen Pacella et al. 2024/MatrixB_EDMeasures_5-26-2023.csv")
 
@@ -231,17 +231,17 @@ res_psychosis$predictions |>
 
 ## Hypomania
 
-```{r fig.height=16, fig.width=6}
+```{r fig.height=6, fig.width=6}
 
-# es_hypomania <- data_hypomania |>
-#   escalc_jaccard(domain = "Hypomania") 
-# 
-# res_hypomania <- es_hypomania |>
-#   rma_jaccard_three_level(title = "Hypomania scales")
-# 
-# res_hypomania$predictions |>
-#   kable(align = "r") |>
-#   kable_classic(full_width = FALSE)
+es_hypomania <- data_hypomania |>
+  escalc_jaccard(domain = "(Hypo)mania")
+
+res_hypomania <- es_hypomania |>
+  rma_jaccard_three_level(title = "(Hypo)mania scales")
+
+res_hypomania$predictions |>
+  kable(align = "r") |>
+  kable_classic(full_width = FALSE)
 
 ```
 
@@ -285,7 +285,7 @@ es_combined <- bind_rows(
   es_depression,
   es_anxiety,
   es_psychosis,
-  # es_hypomania,
+  es_hypomania,
   es_eatingdisorders,
   es_youth_ocd
 )
@@ -356,7 +356,7 @@ predictions_combined_by_domain <- bind_rows(
   res_depression$predictions,
   res_anxiety$predictions,
   res_psychosis$predictions,
-  #res_hypomania$predictions,
+  res_hypomania$predictions,
   res_youth_ocd$predictions,
   res_eatingdisorders$predictions,
   res_combined$predictions
@@ -365,7 +365,7 @@ predictions_combined_by_domain <- bind_rows(
                                       "Depression scales",
                                       "Anxiety scales",
                                       "Psychosis scales",
-                                      "Hypomania scales",
+                                      "(Hypo)mania scales",
                                       "Youth OCD scales",
                                       "Eating disorders scales",
                                       "4-level RE")))
