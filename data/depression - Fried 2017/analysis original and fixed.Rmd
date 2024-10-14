@@ -1,0 +1,309 @@
+---
+title: "Fried (2017) analyses"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    code_folding: hide
+    highlight: haddock
+    theme: flatly
+    toc: yes
+    toc_float: yes
+---
+
+```{r, include=FALSE}
+
+# set knit options
+knitr::opts_chunk$set(message = FALSE,
+                      warning = FALSE)
+
+# disable scientific notation
+options(scipen = 999) 
+
+```
+
+# Dependencies
+
+```{r}
+
+library(tibble)
+library(proxy)
+library(vegan)
+library(janitor)
+
+library(qgraph)
+library(ggplot2)
+library(data.table)
+library(reshape2)
+library(psych)
+library(ade4)
+library(viridis)
+
+```
+
+# Data
+
+```{r}
+
+dat <- read_csv("MatrixB.csv")     #Load dat for estimating Jaccard index (no difference between specific and compound symptoms)
+
+# dat <- tibble(
+#   IDS   = c(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0), 
+#   QIDS  = c(1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0), 
+#   BDI   = c(1, 1, 1, 1, 1, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0), 
+#   CESD  = c(1, 1, 1, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0), 
+#   SDS   = c(1, 1, 1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 1, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 1, 0, 1, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0), 
+#   MADRS = c(1, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0), 
+#   HRSD  = c(1, 1, 1, 0, 1, 1, 1, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1)
+# )
+
+```
+
+# Jaccard index
+
+## Interpretation
+
+Real, R., & Vargas, J. M. (1996). The probabilistic basis of Jaccard's index of similarity. Systematic Biology, 45(3), 380-385. DOI:10.1093/sysbio/45.3.380
+
+- Jaccard < 0.25: Typically considered low similarity, meaning that the two sets have few elements in common.
+- 0.25 ≤ Jaccard < 0.5: Moderate similarity, which indicates that the sets share some commonalities but still have many differences.
+- 0.5 ≤ Jaccard < 0.75: High similarity, meaning there is substantial overlap between the sets.
+- Jaccard ≥ 0.75: Very high similarity, with most elements being shared between the sets.
+
+## Original code
+
+```{r}
+
+##### Estimation of overlap, using the Jaccard Index
+
+# IDS
+#dat1<-dat[which(dat$HRSD==1|dat$IDS==1),]
+a1 <- 1-(dist.binary(matrix(c(dat$IDS, dat$QIDS), nrow = 2, byrow = TRUE), method = 1)^2)
+b1 <- 1-(dist.binary(matrix(c(dat$IDS, dat$BDI), nrow = 2, byrow = TRUE), method = 1)^2)
+c1 <- 1-(dist.binary(matrix(c(dat$IDS, dat$CESD), nrow = 2, byrow = TRUE), method = 1)^2)
+d1 <- 1-(dist.binary(matrix(c(dat$IDS, dat$SDS), nrow = 2, byrow = TRUE), method = 1)^2)
+e1 <- 1-(dist.binary(matrix(c(dat$IDS, dat$MADRS), nrow = 2, byrow = TRUE), method = 1)^2)
+f1 <- 1-(dist.binary(matrix(c(dat$IDS, dat$HRSD), nrow = 2, byrow = TRUE), method = 1)^2)
+IDS.v <- c(1,a1,b1,c1,d1,e1,f1)
+
+# QIDS
+a2 <- 1-(dist.binary(matrix(c(dat$QIDS, dat$IDS), nrow = 2, byrow = TRUE), method = 1)^2)
+b2 <- 1-(dist.binary(matrix(c(dat$QIDS, dat$BDI), nrow = 2, byrow = TRUE), method = 1)^2)
+c2 <- 1-(dist.binary(matrix(c(dat$QIDS, dat$CESD), nrow = 2, byrow = TRUE), method = 1)^2)
+d2 <- 1-(dist.binary(matrix(c(dat$QIDS, dat$SDS), nrow = 2, byrow = TRUE), method = 1)^2)
+e2 <- 1-(dist.binary(matrix(c(dat$QIDS, dat$MADRS), nrow = 2, byrow = TRUE), method = 1)^2)
+f2 <- 1-(dist.binary(matrix(c(dat$QIDS, dat$HRSD), nrow = 2, byrow = TRUE), method = 1)^2)
+QIDS.v <- c(a2,1,b2,c2,d2,e2,f2)
+
+# BDI
+a3 <- 1-(dist.binary(matrix(c(dat$BDI, dat$IDS), nrow = 2, byrow = TRUE), method = 1)^2)
+b3 <- 1-(dist.binary(matrix(c(dat$BDI, dat$QIDS), nrow = 2, byrow = TRUE), method = 1)^2)
+c3 <- 1-(dist.binary(matrix(c(dat$BDI, dat$CESD), nrow = 2, byrow = TRUE), method = 1)^2)
+d3 <- 1-(dist.binary(matrix(c(dat$BDI, dat$SDS), nrow = 2, byrow = TRUE), method = 1)^2)
+e3 <- 1-(dist.binary(matrix(c(dat$BDI, dat$MADRS), nrow = 2, byrow = TRUE), method = 1)^2)
+f3 <- 1-(dist.binary(matrix(c(dat$BDI, dat$HRSD), nrow = 2, byrow = TRUE), method = 1)^2)
+BDI.v <- c(a3,b3,1,c3,d3,e3,f3)
+
+# CESD
+a4 <- 1-(dist.binary(matrix(c(dat$CESD, dat$IDS), nrow = 2, byrow = TRUE), method = 1)^2)
+b4 <- 1-(dist.binary(matrix(c(dat$CESD, dat$QIDS), nrow = 2, byrow = TRUE), method = 1)^2)
+c4 <- 1-(dist.binary(matrix(c(dat$CESD, dat$BDI), nrow = 2, byrow = TRUE), method = 1)^2)
+d4 <- 1-(dist.binary(matrix(c(dat$CESD, dat$SDS), nrow = 2, byrow = TRUE), method = 1)^2)
+e4 <- 1-(dist.binary(matrix(c(dat$CESD, dat$MADRS), nrow = 2, byrow = TRUE), method = 1)^2)
+f4 <- 1-(dist.binary(matrix(c(dat$CESD, dat$HRSD), nrow = 2, byrow = TRUE), method = 1)^2)
+CESD.v <- c(a4,b4,c4,1, d4,e4,f4)
+
+# SDS
+a5 <- 1-(dist.binary(matrix(c(dat$SDS, dat$IDS), nrow = 2, byrow = TRUE), method = 1)^2)
+b5 <- 1-(dist.binary(matrix(c(dat$SDS, dat$QIDS), nrow = 2, byrow = TRUE), method = 1)^2)
+c5 <- 1-(dist.binary(matrix(c(dat$SDS, dat$BDI), nrow = 2, byrow = TRUE), method = 1)^2)
+d5 <- 1-(dist.binary(matrix(c(dat$SDS, dat$CESD), nrow = 2, byrow = TRUE), method = 1)^2)
+e5 <- 1-(dist.binary(matrix(c(dat$SDS, dat$MADRS), nrow = 2, byrow = TRUE), method = 1)^2)
+f5 <- 1-(dist.binary(matrix(c(dat$SDS, dat$HRSD), nrow = 2, byrow = TRUE), method = 1)^2)
+SDS.v <- c(a5,b5,c5, d5,1, e5,f5)
+
+# MADRS
+a6 <- 1-(dist.binary(matrix(c(dat$MADRS, dat$IDS), nrow = 2, byrow = TRUE), method = 1)^2)
+b6 <- 1-(dist.binary(matrix(c(dat$MADRS, dat$QIDS), nrow = 2, byrow = TRUE), method = 1)^2)
+c6 <- 1-(dist.binary(matrix(c(dat$MADRS, dat$BDI), nrow = 2, byrow = TRUE), method = 1)^2)
+d6 <- 1-(dist.binary(matrix(c(dat$MADRS, dat$CESD), nrow = 2, byrow = TRUE), method = 1)^2)
+e6 <- 1-(dist.binary(matrix(c(dat$MADRS, dat$SDS), nrow = 2, byrow = TRUE), method = 1)^2)
+f6 <- 1-(dist.binary(matrix(c(dat$MADRS, dat$HRSD), nrow = 2, byrow = TRUE), method = 1)^2)
+MADRS.v <- c(a6,b6,c6, d6,e6,1,f6)
+
+# HRSD
+a7 <- 1-(dist.binary(matrix(c(dat$HRSD, dat$IDS), nrow = 2, byrow = TRUE), method = 1)^2)
+b7 <- 1-(dist.binary(matrix(c(dat$HRSD, dat$QIDS), nrow = 2, byrow = TRUE), method = 1)^2)
+c7 <- 1-(dist.binary(matrix(c(dat$HRSD, dat$BDI), nrow = 2, byrow = TRUE), method = 1)^2)
+d7 <- 1-(dist.binary(matrix(c(dat$HRSD, dat$CESD), nrow = 2, byrow = TRUE), method = 1)^2)
+e7 <- 1-(dist.binary(matrix(c(dat$HRSD, dat$SDS), nrow = 2, byrow = TRUE), method = 1)^2)
+f7 <- 1-(dist.binary(matrix(c(dat$HRSD, dat$MADRS), nrow = 2, byrow = TRUE), method = 1)^2)
+HRSD.v <- c(a7,b7,c7, d7,e7,f7,1)
+
+# Create table
+M = matrix(nrow=7, ncol=7) 
+colnames(M) <- c("IDS",	"QIDS",	"BDI",	"CESD",	"SDS"	,"MADRS"	,"HRSD")
+rownames(M) <- c("IDS",	"QIDS",	"BDI",	"CESD",	"SDS"	,"MADRS"	,"HRSD")
+M[1,] <- IDS.v
+M[2,] <- QIDS.v
+M[3,] <- BDI.v
+M[4,] <- CESD.v
+M[5,] <- SDS.v
+M[6,] <- MADRS.v
+M[7,] <- HRSD.v
+isSymmetric(M)
+
+janitor::round_half_up(M, 2)
+
+M[M == 1] <- 0 # replace diagonal with 0
+janitor::round_half_up(colMeans(M, na.rm = TRUE), 2)
+janitor::round_half_up(mean(colMeans(M, na.rm = TRUE)), 2) 
+
+```
+
+Eiko replaced the diagonal with 0 and included this in the mean, although the table in the manuscript puts 1 in the diagonal.
+
+"The mean overlap among all scales is 0.36" ([Fried, 2017, p. 194)
+
+“Mean overlap 0.39 0.40 0.40 0.27 0.37 0.30 0.36” (Fried, 2017, p. 194)
+
+### Exclude diagonal from mean calculation
+
+```{r}
+
+diag(M) <- NA
+janitor::round_half_up(colMeans(M, na.rm = TRUE), 2)
+
+```
+
+The mean overlap among all scales is `r janitor::round_half_up(mean(colMeans(M, na.rm = TRUE)), 2)`
+
+## Using vegan
+
+```{r}
+
+# calculate Jaccard similarities
+jaccard_diff <- dat |>
+  as.matrix() |>
+  t() |>
+  vegan::vegdist(method = "jaccard", binary = TRUE) |>
+  as.matrix()
+
+jaccard_sim <- 1 - jaccard_diff
+
+# round
+jaccard_sim_rounded <- janitor::round_half_up(jaccard_sim, 2)
+
+# print
+jaccard_sim_rounded
+
+# calculate column means
+diag(jaccard_sim_rounded) <- NA
+janitor::round_half_up(colMeans(jaccard_sim_rounded, na.rm = TRUE), 2)
+
+```
+
+The mean overlap among all scales is `r janitor::round_half_up(mean(colMeans(jaccard_sim_rounded, na.rm = TRUE)), 2)`
+
+## Using proxy
+
+```{r}
+
+# calculate Jaccard similarities
+jaccard_diff <- dat |>
+  as.matrix() |> 
+  t() |>
+  proxy::dist(data_mat_t, method = "Jaccard") |>
+  as.matrix()
+
+jaccard_sim <- 1 - jaccard_diff
+
+# round
+jaccard_sim_rounded <- janitor::round_half_up(jaccard_sim, 2)
+
+# print
+jaccard_sim_rounded
+
+# calculate column means
+diag(jaccard_sim_rounded) <- NA
+janitor::round_half_up(colMeans(jaccard_sim_rounded, na.rm = TRUE), 2)
+
+```
+
+The mean overlap among all scales is `r janitor::round_half_up(mean(colMeans(jaccard_sim_rounded, na.rm = TRUE)), 2)`
+
+# original other calc
+
+```{r}
+
+length1<-c(28,9,21,18,20,9,17) # length of original (adjusted) questionnaires; e.g. CESD 20 items originally, combined down to 18
+length2<-c(33,20,25,21,23,12,22) # items in analysis per scale; CESD captures 21 items
+
+cor(length1, colMeans(M)) #0.2938447
+cor(length2, colMeans(M)) #0.5720158
+
+```
+
+# original plot
+
+```{r}
+
+dataplot <- read_csv("MatrixA.csv") #Load data for plot (difference between specific and compound symptoms)
+
+##### Figure 1 
+##### Thanks for assistance with ggplot2 to Jana Jarecki
+set.seed(223)
+d <- dataplot
+d[, S := factor(paste0("S",1:nrow(d)))] #Create symptom variable
+d = melt(d, id.vars="S", variable.name="Scales", value.name="Type") #Transform to long format
+d = d[Type>=1] #Keep the scales in which the symptoms are 1 (present) or 2 (included)
+d[, Type := factor(Type, labels=c("Scale contains compound symptom", "Scale contains specific symptom"))]
+d[, count := .N, by=S]
+
+# Symptom order
+sympt.order = d[, .N, by=S][order(N)][, S] #Replace by order
+d[, S := factor(S, levels = sympt.order)]
+
+# Scale order by frequency
+scale.order = d[, .N, by=Scales][order(N)][, Scales]
+d[, Scales := factor(Scales, levels = scale.order)]
+d[, Scales2 := as.numeric(Scales)]
+
+# Plot
+pal1 <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+a<- ggplot(d, aes(x=S, y=Scales2, group=S, color=as.factor(Scales), shape=Type, rev=F)) +
+  geom_line() + #keep this here, otherwise there is an error 
+  xlab("") +
+  ylab("") +
+  # Generate the grid lines
+  geom_hline(yintercept = 1:7, colour = "grey80", size = .2) +
+  geom_vline(xintercept = 1:52, colour = "grey80", size = .2) +
+  # Points and lines
+  geom_line(colour="grey60") +
+  geom_point(size=3, fill="white") +
+  # Fill the middle space with a white blank rectangle
+  geom_rect(xmin=-Inf,xmax=Inf,ymin=-Inf,ymax=.6,fill="white", color=NA) +
+  # Polar coordinates
+  coord_polar() +
+  scale_shape_manual(values=c(21,19)) +
+  # The angle for the symptoms and remove the default grid lines
+  theme(axis.text.x = element_text(angle = 360/(2*pi)*rev( pi/2 + seq( pi/52, 2*pi-pi/52, len=52)) + c(rep(0, 26), rep(180,28))),
+        panel.border = element_blank(),
+        axis.line = element_blank(),
+        axis.ticks = element_blank(),
+        panel.grid = element_blank(),
+        panel.background = element_blank(),
+        legend.position="top",
+        plot.margin = unit(rep(.5,4), "lines")) +
+  labs(fill="") + # remove legend title
+  scale_y_continuous(limits=c(-4,7), expand=c(0,0), breaks=1:7, labels=d[, levels(Scales)]) +
+  scale_color_manual(values=pal1); a
+
+ggsave(plot=a,filename="Figure1.pdf", width=7, height=7, useDingbats=FALSE)
+# Figure 1 was further adjusted in Inkscape
+
+```
+
+
+
+

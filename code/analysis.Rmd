@@ -1,0 +1,403 @@
+---
+title: "Meta-analyses of item content similarity in clinical domains"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    code_folding: hide
+    highlight: haddock
+    theme: flatly
+    toc: yes
+    toc_float: yes
+---
+
+```{r, include=FALSE}
+
+# set knit options
+knitr::opts_chunk$set(message = FALSE,
+                      warning = FALSE)
+
+# disable scientific notation
+options(scipen = 999) 
+
+```
+
+# Dependencies
+
+```{r}
+
+library(dplyr)
+library(readr)
+library(tibble)
+library(forcats)
+library(proxy)
+library(janitor)
+library(metafor)
+library(ggplot2)
+library(ggstance)
+library(scales)
+library(knitr)
+library(kableExtra)
+
+```
+
+# Data
+
+```{r}
+
+data_depression <- read_csv("../data/depression - Fried 2017/MatrixB.csv")     #Load dat for estimating Jaccard index (no difference between specific and compound symptoms)
+
+data_anxiety <- read_csv("../data/anxiety - Wall & Lee 2022/anxiety_wall_lee_jaccard.csv")
+
+data_psychosis <- read_csv("../data/psychosis - Bernardin et al. 2023/psychosis - Bernardin et al. 2023.csv") |> 
+  janitor::clean_names() %>%
+  mutate(across(everything(), ~ ifelse(. == 2, 1, .)))
+
+# data_hypomania <- read_csv("../data/hypomania - Chrobak et al. 2018/matrix.csv") 
+
+data_eatingdisorders <- read_csv("../data/eating disorders - Christensen Pacella et al. 2024/MatrixB_EDMeasures_5-26-2023.csv")
+
+data_youth_ocd <- read_csv("../data/ocd - Visiontay et al. 2019/youth_ocd.csv") |> 
+  janitor::clean_names() %>%
+  mutate(across(everything(), ~ ifelse(. == 2, 1, .)))
+
+# youth depression
+
+# youth anxiety
+
+```
+
+# Jaccard index interpretation
+
+Real, R., & Vargas, J. M. (1996). The probabilistic basis of Jaccard's index of similarity. Systematic Biology, 45(3), 380-385. DOI:10.1093/sysbio/45.3.380
+
+- Jaccard < 0.25: Typically considered low similarity, meaning that the two sets have few elements in common.
+- 0.25 ≤ Jaccard < 0.5: Moderate similarity, which indicates that the sets share some commonalities but still have many differences.
+- 0.5 ≤ Jaccard < 0.75: High similarity, meaning there is substantial overlap between the sets.
+- Jaccard ≥ 0.75: Very high similarity, with most elements being shared between the sets.
+
+# 3-level meta-analyses by domain
+
+```{r}
+
+escalc_jaccard <- function(.data, domain = NA){
+  
+  data_mat_t <- .data |> 
+      as.matrix() |> 
+      t()
+  
+  jaccard_diff <- proxy::dist(data_mat_t, method = "Jaccard") |> as.matrix()
+  jaccard_sim <- 1 - jaccard_diff
+  
+  # calculate SEs for each Jaccard similarity
+  var_names <- rownames(data_mat_t)
+  n_vars <- length(var_names)
+  
+  # initialize the SE matrix
+  se_matrix <- matrix(NA, nrow = n_vars, ncol = n_vars)
+  rownames(se_matrix) <- var_names
+  colnames(se_matrix) <- var_names
+  
+  # compute SEs
+  for (i in 1:n_vars) {
+    for (j in 1:n_vars) {
+      x <- data_mat_t[i, ]
+      y <- data_mat_t[j, ]
+      a <- sum(x == 1 & y == 1)
+      b <- sum(x == 1 & y == 0)
+      c <- sum(x == 0 & y == 1)
+      n <- a + b + c
+      J <- a / n
+      SE <- sqrt(J * (1 - J) / n)
+      se_matrix[i, j] <- SE
+    }
+  }
+  
+  # logit transform
+  logit_jaccard_sim <- qlogis(jaccard_sim)
+  
+  # calculate SEs on the logit scale using the delta method
+  # SE_logit_p = SE_p / [p * (1 - p)]
+  se_logit_jaccard_sim <- se_matrix / (jaccard_sim * (1 - jaccard_sim))
+  
+  # replace infinite values resulting from division by zero
+  se_logit_jaccard_sim[!is.finite(se_logit_jaccard_sim)] <- NA
+  
+  # create variable pair names
+  m <- jaccard_sim
+  ## get indices and values
+  indices <- which(lower.tri(m), arr.ind = TRUE)
+  vec <- m[lower.tri(m)]
+  ## create variable pair names
+  variable_pairs <- paste(rownames(m)[indices[,1]], colnames(m)[indices[,2]], sep = " - ")
+  
+  # create a data frame for effect sizes
+  dat_es <- tibble(domain = domain,
+                   yi = logit_jaccard_sim[lower.tri(logit_jaccard_sim)],
+                   sei = se_logit_jaccard_sim[lower.tri(se_logit_jaccard_sim)],
+                   scale1 = rownames(m)[indices[,1]],
+                   scale2 = colnames(m)[indices[,2]],
+                   pair = variable_pairs)
+  
+  return(dat_es)
+}
+
+
+rma_jaccard_three_level <- function(effect_sizes, title = "Scales"){
+  
+  # fit a three-level meta-analysis model accounting for shared scales
+  fit <- rma.mv(yi = yi, 
+                V = sei^2,
+                random = list(~ 1 | scale1, ~ 1 | scale2),
+                data = effect_sizes,
+                method = "REML")
+  
+  # create a forest plot
+  plot_forest <- 
+    forest(fit, 
+           transf = plogis,
+           slab = effect_sizes$pair,
+           xlim = c(-0.8, 1.7),
+           at = c(0, .2, .4, .6, .8, 1),
+           efac = 0.2,
+           addpred = TRUE,
+           xlab = "Jaccard Similarity",
+           header = c(title, "J [95% CI]"),
+           refline = NA)
+  
+  # table of results
+  results_predictions <- fit |>
+    predict() |>
+    as_tibble() |>
+    dplyr::select(J = pred, ci_lower = ci.lb, ci_upper = ci.ub, pi_lower = pi.lb, pi_upper = pi.ub) |>
+    mutate_all(plogis) |>
+    mutate_all(janitor::round_half_up, digits = 2) |>
+    mutate(domain = title) |>
+    relocate(domain, .before = J)
+  
+  return(list(fit = fit,
+              predictions = results_predictions,
+              forest = plot_forest))
+}
+
+```
+
+## Depression
+
+```{r fig.height=6, fig.width=6}
+
+es_depression <- data_depression |>
+  escalc_jaccard(domain = "Depression") 
+
+res_depression <- es_depression |>
+  rma_jaccard_three_level(title = "Depression scales")
+
+res_depression$predictions |>
+  kable(align = "r") |>
+  kable_classic(full_width = FALSE)
+
+```
+
+## Anxiety
+
+```{r fig.height=16, fig.width=6}
+
+es_anxiety <- data_anxiety |>
+  escalc_jaccard(domain = "Anxiety") 
+
+res_anxiety <- es_anxiety |>
+  rma_jaccard_three_level(title = "Anxiety scales")
+
+res_anxiety$predictions |>
+  kable(align = "r") |>
+  kable_classic(full_width = FALSE)
+
+```
+
+## Psychosis
+
+```{r fig.height=16, fig.width=6}
+
+es_psychosis <- data_psychosis |>
+  escalc_jaccard(domain = "Psychosis")
+
+res_psychosis <- es_psychosis |>
+  rma_jaccard_three_level(title = "Psychosis scales")
+
+res_psychosis$predictions |>
+  kable(align = "r") |>
+  kable_classic(full_width = FALSE)
+
+```
+
+## Hypomania
+
+```{r fig.height=16, fig.width=6}
+
+# es_hypomania <- data_hypomania |>
+#   escalc_jaccard(domain = "Hypomania") 
+# 
+# res_hypomania <- es_hypomania |>
+#   rma_jaccard_three_level(title = "Hypomania scales")
+# 
+# res_hypomania$predictions |>
+#   kable(align = "r") |>
+#   kable_classic(full_width = FALSE)
+
+```
+
+## OCD (youth)
+
+```{r fig.height=8, fig.width=6}
+
+es_youth_ocd <- data_youth_ocd |>
+  escalc_jaccard(domain = "Youth OCD")
+
+res_youth_ocd <- es_youth_ocd |>
+  rma_jaccard_three_level(title = "Youth OCD scales")
+
+res_youth_ocd$predictions |>
+  kable(align = "r") |>
+  kable_classic(full_width = FALSE)
+
+```
+
+## Eating disorders
+
+```{r fig.height=5, fig.width=6}
+
+es_eatingdisorders <- data_eatingdisorders |>
+  escalc_jaccard(domain = "OCD")
+
+res_eatingdisorders <- es_eatingdisorders |>
+  rma_jaccard_three_level(title = "Eating disorders scales")
+
+res_eatingdisorders$predictions |>
+  kable(align = "r") |>
+  kable_classic(full_width = FALSE)
+
+```
+
+# 4-level meta-analyses across domains
+
+```{r fig.height=28, fig.width=6}
+
+es_combined <- bind_rows(
+  es_depression,
+  es_anxiety,
+  es_psychosis,
+  # es_hypomania,
+  es_eatingdisorders,
+  es_youth_ocd
+)
+
+rma_jaccard_four_level <- function(effect_sizes){
+  
+  # Fit a four-level meta-analysis model accounting for shared scales
+  fit <- rma.mv(yi = yi,
+                V = sei^2,
+                random = list(~ 1 | domain/scale1, ~ 1 | domain/scale2),
+                data = effect_sizes,
+                method = "REML")
+  
+  # Create a forest plot
+  plot_forest <- 
+    forest(fit, 
+           transf = plogis,
+           slab = effect_sizes$pair,
+           xlim = c(-0.8, 1.7),
+           at = c(0, .2, .4, .6, .8, 1),
+           #cex = 0.4,
+           efac = 0.2,
+           addpred = TRUE,
+           xlab = "Jaccard Similarity",
+           header = c("Scales", "J [95% CI]"),
+           refline = NA)
+  
+  results_predictions <- fit |>
+    predict() |>
+    as_tibble() |>
+    dplyr::select(J = pred, ci_lower = ci.lb, ci_upper = ci.ub, pi_lower = pi.lb, pi_upper = pi.ub) |>
+    mutate_all(plogis) |>
+    mutate_all(janitor::round_half_up, digits = 2) |>
+    mutate(domain = "4-level RE") |>
+    relocate(domain, .before = J)
+  
+  return(list(fit = fit,
+              predictions = results_predictions,
+              forest = plot_forest))
+}
+
+res_combined <- rma_jaccard_four_level(es_combined)
+
+res_combined$predictions |>
+  kable(align = "r") |>
+  kable_classic(full_width = FALSE)
+
+#res_combined$fit
+ 
+# Combine estimates and labels into a data frame for easy viewing
+tibble(label = c("domain", "domain/scale1", "domain again", "domain/scale2")) |>
+  mutate(logit_sigma = res_combined$fit$sigma2,
+         sigma = round_half_up(plogis(logit_sigma), 2)) |>
+  filter(label != "domain again") |>
+  select(-logit_sigma) |>
+  kable(align = "r") |>
+  kable_classic(full_width = FALSE)
+
+```
+
+## Comparions between domains
+
+3- and 4-level meta
+
+```{r fig.height=4, fig.width=6}
+
+predictions_combined_by_domain <- bind_rows(
+  res_depression$predictions,
+  res_anxiety$predictions,
+  res_psychosis$predictions,
+  #res_hypomania$predictions,
+  res_youth_ocd$predictions,
+  res_eatingdisorders$predictions,
+  res_combined$predictions
+) |>
+  mutate(domain = fct_rev(fct_relevel(domain,
+                                      "Depression scales",
+                                      "Anxiety scales",
+                                      "Psychosis scales",
+                                      "Hypomania scales",
+                                      "Youth OCD scales",
+                                      "Eating disorders scales",
+                                      "4-level RE")))
+
+predictions_combined_by_domain |>
+  kable(align = "r") |>
+  kable_classic(full_width = FALSE)
+
+ggplot(predictions_combined_by_domain, aes(J, domain)) +
+  # geom_errorbarh(aes(xmin = pi_lower, xmax = pi_upper), linetype = "dotted", height = 0.26) +
+  # geom_errorbarh(aes(xmin = ci_lower, xmax = ci_upper), linetype = "solid", height = 0.26, size = 0.85) +
+  geom_linerange(aes(xmin = pi_lower, xmax = pi_upper), linetype = "solid", size = 0.45) +
+  geom_linerange(aes(xmin = ci_lower, xmax = ci_upper), linetype = "solid", size = 0.90) +
+  geom_point(size = 2.5) +
+  theme_linedraw() +
+  scale_x_continuous(limits = c(0,1), breaks = scales::breaks_pretty(n = 5), name = "Jaccard Similarity") +
+  ylab("")
+
+dir.create("plots")
+
+ggsave("plots/plot.pdf",
+       width = 6,
+       height = 4)
+
+```
+
+# Session info
+
+```{r}
+
+sessionInfo()
+
+```
+
+
