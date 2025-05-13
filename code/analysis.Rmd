@@ -10,6 +10,14 @@ output:
     toc_float: yes
 ---
 
+# TODO
+
+other domains:
+
+- AUD to be added
+- schizophrenia/psychosis: not enough self report symptom scales when Tim looked into it.
+- BPD?
+
 ```{r, include=FALSE}
 
 # set knit options
@@ -75,29 +83,128 @@ Real, R., & Vargas, J. M. (1996). The probabilistic basis of Jaccard's index of 
 - 0.5 ≤ Jaccard < 0.75: High similarity, meaning there is substantial overlap between the sets.
 - Jaccard ≥ 0.75: Very high similarity, with most elements being shared between the sets.
 
-# 3-level meta-analyses by domain
+# Mean Jaccard index by domain
 
 ```{r}
 
-escalc_jaccard <- function(.data, domain = NA){
-  
-  data_mat_t <- .data |> 
-      as.matrix() |> 
-      t()
+cor_estimates <- function(.data){
+  data_mat_t <- .data |>
+    as.matrix() |> 
+    t()
   
   jaccard_diff <- proxy::dist(data_mat_t, method = "Jaccard") |> as.matrix()
   jaccard_sim <- 1 - jaccard_diff
   
-  # calculate SEs for each Jaccard similarity
+  jaccard_sim[!lower.tri(jaccard_sim)] <- NA
+  
+  mean_jaccard <- mean(jaccard_sim, na.rm = TRUE)
+  se_jaccard <- plotrix::std.error(as.vector(jaccard_sim), na.rm = TRUE)
+  
+  return(data.frame(J_mean = mean_jaccard,
+                    J_se = se_jaccard,
+                    J_ci_lower = mean_jaccard - se_jaccard*1.96,
+                    J_ci_upper = mean_jaccard + se_jaccard*1.96))
+}
+
+dat <- bind_rows(
+  data_depression |>
+    cor_estimates() |>
+    mutate(domain = "Depression"),
+  data_anxiety |>
+    cor_estimates() |>
+    mutate(domain = "Anxiety"),
+  data_psychosis |>
+    cor_estimates() |>
+    mutate(domain = "Psychosis"),
+  data_hypomania |>
+    cor_estimates() |>
+    mutate(domain = "(Hypo)mania"),
+  data_youth_ocd |>
+    cor_estimates() |>
+    mutate(domain = "(Youth) OCD"),
+  data_eatingdisorders |>
+    cor_estimates() |>
+    mutate(domain = "Eating Disorders")
+) |>
+  mutate(logit_J_mean = qlogis(J_mean),
+         # Calculate SEs on the logit scale using the delta method
+         # SE_logit_p = SE_p / [p * (1 - p)]
+         logit_J_se = J_se / (J_mean * (1 - J_mean))) |>
+  relocate(domain, .before = J_mean)
+
+dat |>
+  mutate_if(is.numeric, round_half_up, digits = 2) |>
+  kable(align = "r") |>
+  kable_classic(full_width = FALSE)
+
+```
+
+## Meta across domains
+
+```{r}
+
+# fit meta
+fit <- rma(yi = logit_J_mean, 
+           vi = logit_J_se^2,
+           data = dat,
+           method = "REML")
+
+# create a forest plot
+plot_forest <- 
+  metafor::forest(fit, 
+                  transf = plogis,
+                  slab = domain,
+                  xlim = c(-0.8, 1.7),
+                  at = c(0, .2, .4, .6, .8, 1),
+                  efac = 1,
+                  addpred = TRUE,
+                  xlab = "Jaccard Similarity",
+                  header = c("Domain", "J [95% CI]"),
+                  refline = NA)
+
+# table of results
+results_predictions <- 
+  bind_cols(
+    fit |>
+      predict(transf = plogis, level = 50) |>
+      as_tibble() |>
+      dplyr::select(meta_J = pred, ci_lower = ci.lb, ci_upper = ci.ub, pi_lower_50 = pi.lb, pi_upper_50 = pi.ub),
+    fit |>
+      predict(transf = plogis, level = 95) |>
+      as_tibble() |>
+      dplyr::select(pi_lower_95 = pi.lb, pi_upper_95 = pi.ub)
+  ) |>
+  mutate_all(janitor::round_half_up, digits = 2)
+
+results_predictions |>
+  mutate_if(is.numeric, janitor::round_half_up, digits = 2) |>
+  kable(align = "r") |>
+  kable_classic(full_width = FALSE)
+
+```
+
+# 3-level meta-analyses by domain
+
+```{r}
+
+escalc_jaccard <- function(.data, domain = NA) {
+  data_mat_t <- .data |> 
+    as.matrix() |> 
+    t()
+
+  jaccard_difference <- proxy::dist(data_mat_t, method = "Jaccard") |> as.matrix()
+  jaccard_similarity <- 1 - jaccard_difference
+
+  # Calculate SEs for each Jaccard similarity
   var_names <- rownames(data_mat_t)
   n_vars <- length(var_names)
-  
-  # initialize the SE matrix
+
+  # Initialize the SE matrix
   se_matrix <- matrix(NA, nrow = n_vars, ncol = n_vars)
   rownames(se_matrix) <- var_names
   colnames(se_matrix) <- var_names
-  
-  # compute SEs
+
+  # Compute SEs
   for (i in 1:n_vars) {
     for (j in 1:n_vars) {
       x <- data_mat_t[i, ]
@@ -111,33 +218,47 @@ escalc_jaccard <- function(.data, domain = NA){
       se_matrix[i, j] <- SE
     }
   }
+
+  # Dynamic epsilon for zero-and-one adjustment
+  #epsilon <- 1 / n_vars  # Proportional to the number of variables
+  epsilon <- 0.5 # common default, greater pull towards center and less influence of 0,1 values
   
-  # logit transform
-  logit_jaccard_sim <- qlogis(jaccard_sim)
-  
-  # calculate SEs on the logit scale using the delta method
+  # Apply zero-and-one adjustment
+  adjusted_jaccard_similarity <- (jaccard_similarity * (n_vars - 1) + epsilon) / n_vars
+
+  # Logit transform
+  logit_jaccard_similarity <- qlogis(adjusted_jaccard_similarity)
+
+  # Calculate SEs on the logit scale using the delta method
   # SE_logit_p = SE_p / [p * (1 - p)]
-  se_logit_jaccard_sim <- se_matrix / (jaccard_sim * (1 - jaccard_sim))
-  
-  # replace infinite values resulting from division by zero
-  se_logit_jaccard_sim[!is.finite(se_logit_jaccard_sim)] <- NA
-  
-  # create variable pair names
-  m <- jaccard_sim
-  ## get indices and values
+  se_logit_jaccard_similarity <- se_matrix / (adjusted_jaccard_similarity * (1 - adjusted_jaccard_similarity))
+
+  # Replace zero SEs with a principled lower bound
+  min_se <- sqrt(epsilon * (1 - epsilon) / n_vars)
+  se_logit_jaccard_similarity[se_logit_jaccard_similarity == 0] <- min_se
+
+  # Replace infinite values resulting from division by zero
+  se_logit_jaccard_similarity[!is.finite(se_logit_jaccard_similarity)] <- NA
+
+  # Create variable pair names
+  m <- adjusted_jaccard_similarity
+  ## Get indices and values
   indices <- which(lower.tri(m), arr.ind = TRUE)
   vec <- m[lower.tri(m)]
-  ## create variable pair names
-  variable_pairs <- paste(rownames(m)[indices[,1]], colnames(m)[indices[,2]], sep = " - ")
-  
-  # create a data frame for effect sizes
-  dat_es <- tibble(domain = domain,
-                   yi = logit_jaccard_sim[lower.tri(logit_jaccard_sim)],
-                   sei = se_logit_jaccard_sim[lower.tri(se_logit_jaccard_sim)],
-                   scale1 = rownames(m)[indices[,1]],
-                   scale2 = colnames(m)[indices[,2]],
-                   pair = variable_pairs)
-  
+  ## Create variable pair names
+  variable_pairs <- paste(rownames(m)[indices[, 1]], colnames(m)[indices[, 2]], sep = " - ")
+
+  # Create a data frame for effect sizes
+  dat_es <- tibble(
+    domain = domain,
+    J = jaccard_similarity[lower.tri(jaccard_similarity)],
+    yi = logit_jaccard_similarity[lower.tri(logit_jaccard_similarity)],
+    sei = se_logit_jaccard_similarity[lower.tri(se_logit_jaccard_similarity)],
+    scale1 = rownames(m)[indices[, 1]],
+    scale2 = colnames(m)[indices[, 2]],
+    pair = variable_pairs
+  )
+
   return(dat_es)
 }
 
@@ -153,24 +274,29 @@ rma_jaccard_three_level <- function(effect_sizes, title = "Scales"){
   
   # create a forest plot
   plot_forest <- 
-    forest(fit, 
-           transf = plogis,
-           slab = effect_sizes$pair,
-           xlim = c(-0.8, 1.7),
-           at = c(0, .2, .4, .6, .8, 1),
-           efac = 0.2,
-           addpred = TRUE,
-           xlab = "Jaccard Similarity",
-           header = c(title, "J [95% CI]"),
-           refline = NA)
+    metafor::forest(fit, 
+                    transf = plogis,
+                    slab = effect_sizes$pair,
+                    xlim = c(-0.8, 1.7),
+                    at = c(0, .2, .4, .6, .8, 1),
+                    efac = 0.2,
+                    addpred = TRUE,
+                    xlab = "Jaccard Similarity",
+                    header = c(title, "J [95% CI]"),
+                    refline = NA)
   
   # table of results
-  results_predictions <- fit |>
-    predict() |>
-    as_tibble() |>
-    dplyr::select(J = pred, ci_lower = ci.lb, ci_upper = ci.ub, pi_lower = pi.lb, pi_upper = pi.ub) |>
-    mutate_all(plogis) |>
-    mutate_all(janitor::round_half_up, digits = 2) |>
+  results_predictions <- 
+    bind_cols(
+      fit |>
+        predict(transf = plogis, level = 50) |>
+        as_tibble() |>
+        dplyr::select(J = pred, ci_lower = ci.lb, ci_upper = ci.ub, pi_lower_50 = pi.lb, pi_upper_50 = pi.ub),
+      fit |>
+        predict(transf = plogis, level = 95) |>
+        as_tibble() |>
+        dplyr::select(pi_lower_95 = pi.lb, pi_upper_95 = pi.ub)
+    ) |>
     mutate(domain = title) |>
     relocate(domain, .before = J)
   
@@ -192,6 +318,7 @@ res_depression <- es_depression |>
   rma_jaccard_three_level(title = "Depression scales")
 
 res_depression$predictions |>
+  mutate_if(is.numeric, janitor::round_half_up, digits = 2) |>
   kable(align = "r") |>
   kable_classic(full_width = FALSE)
 
@@ -208,6 +335,7 @@ res_anxiety <- es_anxiety |>
   rma_jaccard_three_level(title = "Anxiety scales")
 
 res_anxiety$predictions |>
+  mutate_if(is.numeric, janitor::round_half_up, digits = 2) |>
   kable(align = "r") |>
   kable_classic(full_width = FALSE)
 
@@ -224,6 +352,7 @@ res_psychosis <- es_psychosis |>
   rma_jaccard_three_level(title = "Psychosis scales")
 
 res_psychosis$predictions |>
+  mutate_if(is.numeric, janitor::round_half_up, digits = 2) |>
   kable(align = "r") |>
   kable_classic(full_width = FALSE)
 
@@ -240,6 +369,7 @@ res_hypomania <- es_hypomania |>
   rma_jaccard_three_level(title = "(Hypo)mania scales")
 
 res_hypomania$predictions |>
+  mutate_if(is.numeric, janitor::round_half_up, digits = 2) |>
   kable(align = "r") |>
   kable_classic(full_width = FALSE)
 
@@ -256,6 +386,7 @@ res_youth_ocd <- es_youth_ocd |>
   rma_jaccard_three_level(title = "Youth OCD scales")
 
 res_youth_ocd$predictions |>
+  mutate_if(is.numeric, janitor::round_half_up, digits = 2) |>
   kable(align = "r") |>
   kable_classic(full_width = FALSE)
 
@@ -272,6 +403,7 @@ res_eatingdisorders <- es_eatingdisorders |>
   rma_jaccard_three_level(title = "Eating disorders scales")
 
 res_eatingdisorders$predictions |>
+  mutate_if(is.numeric, janitor::round_half_up, digits = 2) |>
   kable(align = "r") |>
   kable_classic(full_width = FALSE)
 
@@ -279,7 +411,7 @@ res_eatingdisorders$predictions |>
 
 # 4-level meta-analyses across domains
 
-```{r fig.height=28, fig.width=6}
+```{r fig.height=33, fig.width=6}
 
 es_combined <- bind_rows(
   es_depression,
@@ -301,7 +433,7 @@ rma_jaccard_four_level <- function(effect_sizes){
   
   # Create a forest plot
   plot_forest <- 
-    forest(fit, 
+    meta::forest(fit, 
            transf = plogis,
            slab = effect_sizes$pair,
            xlim = c(-0.8, 1.7),
@@ -313,12 +445,17 @@ rma_jaccard_four_level <- function(effect_sizes){
            header = c("Scales", "J [95% CI]"),
            refline = NA)
   
-  results_predictions <- fit |>
-    predict() |>
-    as_tibble() |>
-    dplyr::select(J = pred, ci_lower = ci.lb, ci_upper = ci.ub, pi_lower = pi.lb, pi_upper = pi.ub) |>
-    mutate_all(plogis) |>
-    mutate_all(janitor::round_half_up, digits = 2) |>
+  results_predictions <- 
+    bind_cols(
+      fit |>
+        predict(transf = plogis, level = 50) |>
+        as_tibble() |>
+        dplyr::select(J = pred, ci_lower = ci.lb, ci_upper = ci.ub, pi_lower_50 = pi.lb, pi_upper_50 = pi.ub),
+      fit |>
+        predict(transf = plogis, level = 95) |>
+        as_tibble() |>
+        dplyr::select(pi_lower_95 = pi.lb, pi_upper_95 = pi.ub)
+    ) |>
     mutate(domain = "4-level RE") |>
     relocate(domain, .before = J)
   
@@ -330,6 +467,7 @@ rma_jaccard_four_level <- function(effect_sizes){
 res_combined <- rma_jaccard_four_level(es_combined)
 
 res_combined$predictions |>
+  mutate_if(is.numeric, janitor::round_half_up, digits = 2) |>
   kable(align = "r") |>
   kable_classic(full_width = FALSE)
 
@@ -341,6 +479,7 @@ tibble(label = c("domain", "domain/scale1", "domain again", "domain/scale2")) |>
          sigma = round_half_up(plogis(logit_sigma), 2)) |>
   filter(label != "domain again") |>
   select(-logit_sigma) |>
+  mutate_if(is.numeric, janitor::round_half_up, digits = 2) |>
   kable(align = "r") |>
   kable_classic(full_width = FALSE)
 
@@ -350,7 +489,7 @@ tibble(label = c("domain", "domain/scale1", "domain again", "domain/scale2")) |>
 
 3- and 4-level meta
 
-```{r fig.height=4, fig.width=6}
+```{r fig.height=3, fig.width=6}
 
 predictions_combined_by_domain <- bind_rows(
   res_depression$predictions,
@@ -371,24 +510,26 @@ predictions_combined_by_domain <- bind_rows(
                                       "4-level RE")))
 
 predictions_combined_by_domain |>
+  mutate_if(is.numeric, janitor::round_half_up, digits = 2) |>
   kable(align = "r") |>
   kable_classic(full_width = FALSE)
 
 ggplot(predictions_combined_by_domain, aes(J, domain)) +
   # geom_errorbarh(aes(xmin = pi_lower, xmax = pi_upper), linetype = "dotted", height = 0.26) +
   # geom_errorbarh(aes(xmin = ci_lower, xmax = ci_upper), linetype = "solid", height = 0.26, size = 0.85) +
-  geom_linerange(aes(xmin = pi_lower, xmax = pi_upper), linetype = "solid", size = 0.45) +
-  geom_linerange(aes(xmin = ci_lower, xmax = ci_upper), linetype = "solid", size = 0.90) +
-  geom_point(size = 2.5) +
+  geom_linerange(aes(xmin = pi_lower_95, xmax = pi_upper_95), linetype = "solid", linewidth = 0.3) +
+  geom_linerange(aes(xmin = pi_lower_50, xmax = pi_upper_50), linetype = "solid", linewidth = 0.6, color = "red") +
+  geom_linerange(aes(xmin = ci_lower, xmax = ci_upper), linetype = "solid", linewidth = 1.2) +
+  geom_point(size = 2.4, color = "red") +
   theme_linedraw() +
-  scale_x_continuous(limits = c(0,1), breaks = scales::breaks_pretty(n = 5), name = "Jaccard Similarity") +
+  scale_x_continuous(limits = c(0,1), breaks = scales::breaks_pretty(n = 10), name = "Jaccard Similarity") +
   ylab("")
 
 dir.create("plots")
 
 ggsave("plots/plot.pdf",
        width = 6,
-       height = 4)
+       height = 3)
 
 ```
 
