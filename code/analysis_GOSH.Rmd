@@ -1,0 +1,374 @@
+---
+title: "Meta-analyses of item content similarity in clinical domains"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    code_folding: hide
+    highlight: haddock
+    theme: flatly
+    toc: yes
+    toc_float: yes
+---
+
+# TODO
+
+other domains:
+
+- AUD to be added
+- schizophrenia/psychosis: not enough self report symptom scales when Tim looked into it.
+- BPD?
+
+```{r, include=FALSE}
+
+# set knit options
+knitr::opts_chunk$set(message = FALSE,
+                      warning = FALSE)
+
+# disable scientific notation
+options(scipen = 999) 
+
+```
+
+# Dependencies
+
+```{r}
+
+library(dplyr)
+library(readr)
+library(tibble)
+library(forcats)
+library(purrr)
+library(tidyr)
+library(proxy)
+library(janitor)
+library(metafor)
+library(ggplot2)
+library(ggstance)
+library(scales)
+library(knitr)
+library(kableExtra)
+
+```
+
+# Data
+
+```{r}
+
+data_depression <- read_csv("../data/depression - Fried 2017/MatrixB.csv")     #Load dat for estimating Jaccard index (no difference between specific and compound symptoms)
+
+data_anxiety <- read_csv("../data/anxiety - Wall & Lee 2022/anxiety_wall_lee_jaccard.csv")
+
+data_psychosis <- read_csv("../data/psychosis - Bernardin et al. 2023/psychosis - Bernardin et al. 2023.csv") |> 
+  janitor::clean_names() %>%
+  mutate(across(everything(), ~ ifelse(. == 2, 1, .)))
+
+data_hypomania <- read_csv("../data/hypomania - Chrobak et al. 2018/hypomania.csv") 
+
+data_eatingdisorders <- read_csv("../data/eating disorders - Christensen Pacella et al. 2024/MatrixB_EDMeasures_5-26-2023.csv")
+
+data_youth_ocd <- read_csv("../data/ocd - Visiontay et al. 2019/youth_ocd.csv") |> 
+  janitor::clean_names() %>%
+  mutate(across(everything(), ~ ifelse(. == 2, 1, .)))
+
+# youth depression
+
+# youth anxiety
+
+```
+
+# GOSH plot
+
+Note this uses rma.uni with no random effects, as its merely diagnostic and because estimating heterogeneity is much more complex with multilevel metas.
+
+```{r}
+
+# Input: binary symptom-by-scale matrix
+mat <- data_eatingdisorders %>% as.matrix()
+
+# Transpose: now rows = scales
+mat_t <- t(mat)
+scales <- colnames(mat)
+
+# Generate all subsets of 2 or more scales
+scale_subsets <- unlist(
+  lapply(2:length(scales), function(n) combn(scales, n, simplify = FALSE)),
+  recursive = FALSE
+)
+
+# Function to compute logit Jaccard + SE for a subset
+extract_jaccard_pairs <- function(subset_scales) {
+  submat <- mat_t[subset_scales, ]
+  
+  # Compute pairwise Jaccard similarities
+  jaccard_sim <- 1 - as.matrix(proxy::dist(submat, method = "Jaccard"))
+  jaccard_sim[!lower.tri(jaccard_sim)] <- NA
+  
+  # Get all pairs
+  indices <- which(lower.tri(jaccard_sim), arr.ind = TRUE)
+  
+  pairs <- tibble(
+    scale1 = rownames(jaccard_sim)[indices[, 1]],
+    scale2 = colnames(jaccard_sim)[indices[, 2]],
+    jaccard = jaccard_sim[lower.tri(jaccard_sim)]
+  ) %>%
+    filter(!is.na(jaccard)) %>%
+    mutate(
+      epsilon = 0.5,  # Adjust for boundary
+      jaccard_adj = (jaccard * (length(subset_scales) - 1) + epsilon) / length(subset_scales),
+      logit_j = qlogis(jaccard_adj),
+      n_common = map2_int(scale1, scale2, ~ {
+        x <- submat[.x, ]
+        y <- submat[.y, ]
+        a <- sum(x == 1 & y == 1)
+        b <- sum(x == 1 & y == 0)
+        c <- sum(x == 0 & y == 1)
+        a + b + c
+      }),
+      se_raw = sqrt(jaccard * (1 - jaccard) / n_common),
+      se_logit = se_raw / (jaccard_adj * (1 - jaccard_adj))
+    ) %>%
+    select(logit_j, se_logit)
+  
+  return(pairs)
+}
+
+# Run meta-analysis for each subset
+gosh_results <- map_dfr(scale_subsets, function(subset) {
+  pairs <- extract_jaccard_pairs(subset)
+  
+  if (nrow(pairs) < 1 || any(is.na(pairs$se_logit))) return(NULL)
+  if (any(pairs$se_logit <= 0 | !is.finite(pairs$se_logit))) return(NULL)
+  
+  res <- tryCatch({
+    rma.uni(yi = pairs$logit_j, sei = pairs$se_logit, method = "REML")
+  }, error = function(e) NULL)
+  
+  if (is.null(res)) return(NULL)
+  
+  tibble(
+    k = length(subset),
+    subset_id = paste(subset, collapse = ", "),
+    pooled_logit = as.numeric(res$b),
+    pooled_jaccard = plogis(res$b[,1]),
+    tau2 = res$tau2
+  )
+})
+
+ggplot(gosh_results, aes(pooled_jaccard)) +
+  geom_histogram() +
+  theme_linedraw()
+
+gosh_results |>
+  summarize(min_pooled_jaccard = min(pooled_jaccard),
+            max_pooled_jaccard = max(pooled_jaccard),
+            mean_pooled_jaccard = mean(pooled_jaccard),
+            sd_pooled_jaccard = sd(pooled_jaccard)) |>
+  mutate_if(is.numeric, round_half_up, digits = 2)
+
+# Plot
+ggplot(gosh_results, aes(x = pooled_jaccard, y = tau2)) +
+  geom_point(alpha = 0.5) +
+  labs(
+    title = "GOSH Plot: Depression Scales",
+    x = "Pooled Jaccard Similarity",
+    y = expression(tau^2)
+  ) +
+  xlim(0,1) +
+  theme_linedraw() 
+
+```
+
+## regression
+
+```{r}
+
+# Get the full list of scales from your data
+all_scales <- colnames(data_eatingdisorders)
+
+# Clean scale names to make valid column names
+safe_scales <- make.names(all_scales)
+
+# Create lookup table to handle weird characters or spacing
+scale_lookup <- tibble(
+  original = all_scales,
+  safe = safe_scales
+)
+
+# Expand each subset to one row per included scale
+# gosh_with_indicators <- gosh_results %>%
+#   mutate(subset_id = stringr::str_replace_all(subset_id, "[^a-zA-Z,]", "")) |>
+#   mutate(subset_id = str_replace_all(subset_id, ", ", ",")) %>%
+#   separate_rows(subset_id, sep = ",") %>%
+#   mutate(subset_id = str_trim(subset_id)) %>%
+#   mutate(scale = make.names(subset_id), included = 1) %>%
+#   select(-subset_id) %>%
+#   pivot_wider(names_from = scale, values_from = included, values_fill = 0, names_prefix = "has_")
+
+gosh_with_indicators <- gosh_results %>%
+  mutate(subset_id = stringr::str_replace_all(subset_id, "[^a-zA-Z,]", "")) %>%
+  mutate(subset_id = str_replace_all(subset_id, ", ", ",")) %>%
+  separate_rows(subset_id, sep = ",") %>%
+  mutate(subset_id = str_trim(subset_id)) %>%
+  mutate(scale = make.names(subset_id)) %>%
+  distinct(subset_id, scale, .keep_all = TRUE) %>%  # remove duplicate scale entries per subset
+  mutate(included = 1) %>%
+  select(-subset_id) %>%
+  ungroup() %>%
+  pivot_wider(
+    names_from = scale,
+    values_from = included,
+    values_fill = list(included = 0),  # fix: explicitly use named list here
+    names_prefix = "has_"
+  ) %>% 
+  select(tau2, starts_with("has_"))
+
+lm_tau2 <- lm(tau2 ~ ., data = gosh_with_indicators)
+
+summary(lm_tau2)
+
+# subset if perfectly collinearity was found
+gosh_with_indicators_filtered <- gosh_results %>% 
+  filter(tau2 > 0) |>
+  mutate(subset_id = stringr::str_replace_all(subset_id, "[^a-zA-Z,]", "")) %>%
+  mutate(subset_id = str_replace_all(subset_id, ", ", ",")) %>%
+  separate_rows(subset_id, sep = ",") %>%
+  mutate(subset_id = str_trim(subset_id)) %>%
+  mutate(scale = make.names(subset_id)) %>%
+  distinct(subset_id, scale, .keep_all = TRUE) %>%  # remove duplicate scale entries per subset
+  mutate(included = 1) %>%
+  select(-subset_id) %>%
+  ungroup() %>%
+  pivot_wider(
+    names_from = scale,
+    values_from = included,
+    values_fill = list(included = 0),  # fix: explicitly use named list here
+    names_prefix = "has_"
+  ) %>% 
+  select(tau2, starts_with("has_")) 
+
+# |>
+#   # specific exclusions
+#   select(-has_psr, -has_yparqb, -has_bsqsp)
+
+lm_tau2_filtered <- lm(tau2 ~ ., data = gosh_with_indicators_filtered)
+
+summary(lm_tau2_filtered)
+
+```
+- label just the most significant scale and check if it accounts for all results with heterogeneity.
+
+## Dep
+
+```{r}
+
+gosh_results_subsets <- gosh_results |>
+  mutate(Scale = ifelse(str_detect(subset_id, "IDS"), "Includes IDS", "Does not include IDS"),
+         Scale = fct_relevel(Scale, "Includes IDS", "Does not include IDS")) |>
+  arrange(Scale)
+
+gosh_results_subsets |>
+  filter(Scale == "Does not include IDS") |>
+  summarize(min_pooled_jaccard = min(pooled_jaccard),
+            max_pooled_jaccard = max(pooled_jaccard),
+            mean_pooled_jaccard = mean(pooled_jaccard),
+            sd_pooled_jaccard = sd(pooled_jaccard)) |>
+  mutate_if(is.numeric, round_half_up, digits = 2)
+
+ggplot(gosh_results_subsets, aes(x = pooled_jaccard, y = tau2, color = Scale)) +
+  geom_point(alpha = 0.5) +
+  labs(
+    title = "GOSH Plot: Depression Scales",
+    x = "Pooled Jaccard Similarity",
+    y = expression(tau^2)
+  ) +
+  xlim(0,1) +
+  scale_color_viridis_d(begin = 0.3, end = 0.7, direction = -1) +
+  theme_linedraw() 
+
+```
+
+## Anx
+
+dropping STAI(S) or STAI(T) or BAI does not remove heterogeneity. Large or small jaccard values aren't attributable to specific scales either.  
+
+```{r}
+
+gosh_results_subsets <- gosh_results |>
+  mutate(Scale = ifelse(str_detect(subset_id, "STAI|BAI"), "Includes STAI(S) or STAI(T) or BAI", "Does not include STAI(S) or STAI(T) or BAI"),
+         Scale = fct_relevel(Scale, "Includes STAI(S) or STAI(T) or BAI", "Does not include STAI(S) or STAI(T) or BAI")) |>
+  arrange(Scale)
+
+gosh_results_subsets |>
+  filter(Scale == "Does not include STAI(S) or STAI(T) or BAI") |>
+  summarize(min_pooled_jaccard = min(pooled_jaccard),
+            max_pooled_jaccard = max(pooled_jaccard),
+            mean_pooled_jaccard = mean(pooled_jaccard),
+            sd_pooled_jaccard = sd(pooled_jaccard)) |>
+  mutate_if(is.numeric, round_half_up, digits = 2)
+
+ggplot(gosh_results_subsets, aes(x = pooled_jaccard, y = tau2, color = Scale)) +
+  geom_point(alpha = 0.5) +
+  labs(
+    title = "GOSH Plot: Anxiety Scales",
+    x = "Pooled Jaccard Similarity",
+    y = expression(tau^2)
+  ) +
+  xlim(0,1) +
+  scale_color_viridis_d(begin = 0.3, end = 0.7, direction = -1) +
+  theme_linedraw() 
+
+```
+
+## Psychosis
+
+No single scale clearly reduces heterogeneity or stabilizes ES
+
+```{r}
+
+gosh_results_subsets <- gosh_results |>
+  mutate(Scale = ifelse(str_detect(subset_id, "iraos"), "Includes IRAOS", "Does not include IRAOS"),
+         Scale = fct_relevel(Scale, "Includes IRAOS", "Does not include IRAOS")) |>
+  arrange(Scale)
+
+gosh_results_subsets |>
+  filter(Scale == "Does not include IRAOS") |>
+  summarize(min_pooled_jaccard = min(pooled_jaccard),
+            max_pooled_jaccard = max(pooled_jaccard),
+            mean_pooled_jaccard = mean(pooled_jaccard),
+            sd_pooled_jaccard = sd(pooled_jaccard)) |>
+  mutate_if(is.numeric, round_half_up, digits = 2)
+
+ggplot(gosh_results_subsets, aes(x = pooled_jaccard, y = tau2, color = Scale)) +
+  geom_point(alpha = 0.5) +
+  labs(
+    title = "GOSH Plot: Psychosis Scales",
+    x = "Pooled Jaccard Similarity",
+    y = expression(tau^2)
+  ) +
+  xlim(0,1) +
+  scale_color_viridis_d(begin = 0.3, end = 0.7, direction = -1) +
+  theme_linedraw() 
+
+```
+
+## eating disorders
+
+No single scale clearly reduces heterogeneity or stabilizes ES. heterogeneity is low either way.
+
+# Multiverse metaverse
+
+Instead of using the mean and SE jaccard index in each domain in a meta analysis across domains, we could instead use the mean GOSH jaccard index and its SE. This would pose the question "what range of pooled Jaccard estimates is plausible under different researcher decisions re the inclusion of scales?"
+
+Even without a meta analysis, it would be useful to have a plot that shows the min, max, median (interquartile range?) of GOSH estimates of pooled jaccard index to show how inclusion choices could influence this.
+
+Maybe its worth modifying the GOSH method to specify that at least 3 scales must be chosen instead of at least 2? or some other value of N.
+
+# Session info
+
+```{r}
+
+sessionInfo()
+
+```
+
+
