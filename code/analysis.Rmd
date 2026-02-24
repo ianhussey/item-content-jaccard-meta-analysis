@@ -185,6 +185,8 @@ results_predictions |>
 
 # 3-level meta-analyses by domain
 
+MORE THOUGHT NEEDED BEFORE USING THIS LOGIT WITH OFFSETTING - EG SHOULD IT BE A DIFFERENT TRANSFORMATION, NO TRANSFORMATION, ETC.
+
 ```{r}
 
 escalc_jaccard <- function(.data, domain = NA) {
@@ -410,6 +412,8 @@ res_eatingdisorders$predictions |>
 ```
 
 # 4-level meta-analyses across domains
+
+MORE THOUGHT NEEDED BEFORE USING THIS LOGIT WITH OFFSETTING - EG SHOULD IT BE A DIFFERENT TRANSFORMATION, NO TRANSFORMATION, ETC.
 
 ```{r fig.height=33, fig.width=6}
 
